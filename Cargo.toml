@@ -13,7 +13,7 @@ napi-derive = "3.6.3"
 mermaid-rs-renderer = "0.3.1"
 
 [dependencies.napi]
-version = "3.12.1"
+version = "3.12.2"
 features = ["napi10"]
 
 [build-dependencies]
