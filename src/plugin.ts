@@ -1,8 +1,55 @@
-import { defineMdastPlugin, defineHastPlugin } from "satteri";
+import { defineMdastPlugin, defineHastPlugin, htmlToHast } from "satteri";
 import type { MdastPluginDefinition, HastPluginDefinition } from "satteri";
 import { renderMermaidSVG } from "./renderer";
 
 const DATA_KEY = "__satteri_mermaid_codes";
+
+const RESPONSIVE_STYLE = "width:100%;display:block";
+
+/**
+ * SVG をレスポンシブ化する。
+ *
+ * 注意: `/\b(width|height)="/` は `-` と `w` の間でも `\b` が成立するため
+ * `stroke-width="..."` の `width="..."` 部分に誤マッチして線幅指定を全滅させる。
+ * ルート要素の属性のみを削るため先頭の空白を必須にしている。
+ */
+function makeResponsive(svg: string): string {
+  const sized = svg.replace(/\s(?:width|height)="[^"]*"/g, "");
+  if (/ style="/.test(sized)) {
+    return sized.replace(/ style="([^"]*)"/, (_, inner) => ` style="${RESPONSIVE_STYLE};${inner}"`);
+  }
+  return sized.replace(/<svg\b([^>]*)>/, `<svg$1 style="${RESPONSIVE_STYLE}">`);
+}
+
+/** mdxJsx 属性配列から文字値を取得する。 */
+function mdxAttrValue(attrs: Array<any> | undefined, name: string): string | undefined {
+  const attr = attrs?.find((a) => a?.type === "mdxJsxAttribute" && a?.name === name);
+  if (!attr) return undefined;
+  const v = (attr as any).value;
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object" && typeof (v as any).value === "string") {
+    return (v as any).value as string;
+  }
+  return undefined;
+}
+
+/** `ctx.data` バッグから mermaid ソースを引く。 */
+function codeFromBag(ctx: any, id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  const bag = ctx.data?.[DATA_KEY] as Record<string, string> | undefined;
+  return bag?.[id];
+}
+
+/**
+ * MDX パイプラインでは MDAST の `{ rawHtml }` プレースホルダが
+ * `mdxJsxFlowElement{name:"pre"}`（子なし、実コードは `ctx.data` バッグ）に
+ * 変換される。`raw` / `element` だけでは拾えないため専用判定を用意する。
+ */
+function isMermaidMdxPre(node: any): boolean {
+  if (node?.name !== "pre") return false;
+  const cls = mdxAttrValue(node.attributes, "class") ?? mdxAttrValue(node.attributes, "className");
+  return cls?.split(/\s+/).includes("mermaid") ?? false;
+}
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -398,9 +445,42 @@ export function createMermaidHastPlugin(options?: MermaidPluginOptions): {
       visit(node, ctx) {
         const cls = node.properties?.className;
         if (!Array.isArray(cls) || !cls.includes("mermaid")) return;
-        const text = (node.children?.[0] as any)?.value;
-        if (!text) return;
-        replaceWithSVG(node, text, ctx);
+        const props = node.properties as Record<string, unknown> | undefined;
+        const id =
+          (typeof props?.["dataMermaidId"] === "string" && (props["dataMermaidId"] as string)) ||
+          (typeof props?.["data-mermaid-id"] === "string" &&
+            (props["data-mermaid-id"] as string)) ||
+          undefined;
+        const text = (node.children?.[0] as any)?.value as string | undefined;
+        const code = text ?? codeFromBag(ctx, id);
+        if (!code) return;
+        replaceWithSVG(node, code, ctx);
+      },
+    },
+
+    // 路径 C：MDX パイプラインの JSX プレースホルダ
+    // MDAST の rawHtml は MDX 変換で mdxJsxFlowElement{name:"pre"} になる。
+    // 子を持たず実コードは ctx.data バッグにあるため ID 引きする。
+    mdxJsxFlowElement: {
+      filter: ["pre"],
+      visit(node: any, ctx: any) {
+        if (!isMermaidMdxPre(node)) return;
+        const id = mdxAttrValue(node.attributes, "data-mermaid-id");
+        const firstText = (node.children?.[0] as any)?.value as string | undefined;
+        const code = codeFromBag(ctx, id) ?? firstText;
+        if (!code || !code.trim()) return;
+        replaceWithSVG(node, code, ctx);
+      },
+    },
+    mdxJsxTextElement: {
+      filter: ["pre"],
+      visit(node: any, ctx: any) {
+        if (!isMermaidMdxPre(node)) return;
+        const id = mdxAttrValue(node.attributes, "data-mermaid-id");
+        const firstText = (node.children?.[0] as any)?.value as string | undefined;
+        const code = codeFromBag(ctx, id) ?? firstText;
+        if (!code || !code.trim()) return;
+        replaceWithSVG(node, code, ctx);
       },
     },
   });
@@ -419,14 +499,23 @@ export function createMermaidHastPlugin(options?: MermaidPluginOptions): {
     try {
       const renderOpts = buildRenderOptions(options);
       const svgRaw = renderMermaidSVG(code.trim(), renderOpts);
-      const svg = responsive
-        ? svgRaw
-            .replace(/\b(width|height)="[^"]*"/g, "")
-            .replace(/ style="([^"]+)"/, (_, inner) => ` style="width:100%;display:block;${inner}"`)
-        : svgRaw;
+      const svg = responsive ? makeResponsive(svgRaw) : svgRaw;
+      const html = `<div class="mermaid" data-mermaid-ssg="true" style="${wrapperStyle}">${svg}</div>`;
+      if (ctx.sourceFormat === "mdx") {
+        // MDX/JSX 出力は hast `raw` ノードをコンパイルできない
+        // (mdxjs-rs:raw-html) ため、実要素ツリーにパースして置換する。
+        const tree = htmlToHast(html, { fragment: true }) as unknown as {
+          children?: unknown[];
+        };
+        const children = tree?.children ?? [];
+        if (children.length > 0) {
+          ctx.replaceNode(node, children as any);
+          return;
+        }
+      }
       ctx.replaceNode(node, {
         type: "raw",
-        value: `<div class="mermaid" data-mermaid-ssg="true" style="${wrapperStyle}">${svg}</div>`,
+        value: html,
       });
     } catch {
       ctx.replaceNode(node, {

@@ -1,6 +1,6 @@
 {
-  "name": "@xingwangzhe/satteri-mermaid",
-  "version": "0.7.8",
+  "name": "@minumarapid/satteri-mermaid",
+  "version": "0.7.9",
   "description": "Sätteri MDAST+HAST plugin: render Mermaid diagrams as static SVG at build time via mermaid-rs (napi-rs). 23 diagram types, zero client JS.",
   "keywords": [
     "astro-component",
@@ -13,12 +13,12 @@
     "renderer",
     "satteri"
   ],
-  "homepage": "https://github.com/xingwangzhe/satteri-mermaid#readme",
+  "homepage": "https://github.com/minumarapid/satteri-mermaid#readme",
   "license": "MIT",
   "author": "xingwangzhe",
   "repository": {
     "type": "git",
-    "url": "https://github.com/xingwangzhe/satteri-mermaid"
+    "url": "https://github.com/minumarapid/satteri-mermaid"
   },
   "files": [
     "dist",
@@ -40,7 +40,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://npm.pkg.github.com/"
   },
   "scripts": {
     "dev": "cd example && bun run dev",
